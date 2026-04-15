@@ -1,68 +1,85 @@
 from __future__ import annotations
 
-import ast
 import hashlib
-import json
 import re
-from datetime import datetime, date
-from typing import Any
-
-from dateutil import parser
+from datetime import date, datetime
 
 
-def parse_date_safe(value: Any) -> date | None:
-    if value is None:
-        return None
-    if isinstance(value, date):
-        return value
-    text = str(value).strip()
-    if not text or text.lower() == "nan":
-        return None
-    try:
-        return parser.parse(text).date()
-    except Exception:
-        return None
-
-
-def parse_listish(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(x) for x in value]
-    text = str(value).strip()
-    if not text or text.lower() == "nan":
-        return []
-    try:
-        parsed = ast.literal_eval(text)
-        if isinstance(parsed, list):
-            return [str(x) for x in parsed]
-    except Exception:
-        pass
-    return [text]
-
-
-def parse_rating_overall(value: Any) -> float | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text or text.lower() == "nan":
-        return None
-    try:
-        payload = json.loads(text)
-        overall = payload.get("overall")
-        return float(overall) if overall is not None else None
-    except Exception:
-        return None
-
-
-def normalize_whitespace(text: str) -> str:
+def normalize_whitespace(text: str | None) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
 
-def make_review_id(property_id: str, acquisition_date: Any, review_title: str | None, review_text: str | None) -> str:
-    raw = f"{property_id}|{acquisition_date}|{review_title or ''}|{review_text or ''}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+from datetime import datetime
 
 
-def split_sentences(text: str) -> list[str]:
-    return [s.strip() for s in re.split(r"[.!?;\n]+", text or "") if s.strip()]
+from datetime import datetime
+import pandas as pd
+
+
+def parse_date_safe(v):
+
+    if v is None:
+        return None
+
+    if isinstance(v, float) and pd.isna(v):
+        return None
+
+    s = str(v).strip()
+
+    if not s:
+        return None
+
+    formats = [
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%m/%d/%Y",
+        "%m/%d/%y",
+        "%Y/%m/%d",
+    ]
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(s, fmt).date()
+        except:
+            pass
+
+    try:
+        return pd.to_datetime(s).date()
+    except:
+        return None
+
+
+def parse_rating_overall(value: object) -> float | None:
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none"}:
+        return None
+
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def make_review_id(
+    property_id: str,
+    acquisition_date: date | None,
+    review_title: str | None,
+    review_text: str | None,
+) -> str:
+    payload = "||".join(
+        [
+            property_id or "",
+            acquisition_date.isoformat() if acquisition_date else "",
+            normalize_whitespace(review_title),
+            normalize_whitespace(review_text),
+        ]
+    )
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
+    return f"{property_id}_{digest}"

@@ -1,12 +1,16 @@
+from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+
 
 @dataclass(frozen=True)
 class FacetConfig:
     question_text: str
     options: list[dict[str, str]]
-    expected_rate: int
+    # Expected fraction of recent reviews that should mention this facet.
+    # Example: 0.02 means roughly 2 mentions per 100 recent reviews.
+    expected_rate: float
     ttl_days: int
     business_importance: float
     answerability: float = 0.9
@@ -22,7 +26,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "No parking", "value": "not_available"},
                 {"label": "Didn't use it", "value": "not_applicable"},
             ],
-            expected_rate=2,
+            expected_rate=0.02,
             ttl_days=180,
             business_importance=0.9,
         ),
@@ -33,12 +37,11 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "Hard to find", "value": "hard"},
                 {"label": "Didn't use it", "value": "not_applicable"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=240,
             business_importance=0.6,
         ),
     },
-
     "ROOM_CLEANLINESS": {
         "surfaces_clean": FacetConfig(
             question_text="Were the floors, surfaces, and furniture clean?",
@@ -46,7 +49,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "Clean", "value": "yes"},
                 {"label": "Not clean", "value": "no"},
             ],
-            expected_rate=2,
+            expected_rate=0.02,
             ttl_days=90,
             business_importance=0.95,
         ),
@@ -56,7 +59,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "Yes", "value": "yes"},
                 {"label": "No", "value": "no"},
             ],
-            expected_rate=2,
+            expected_rate=0.02,
             ttl_days=90,
             business_importance=0.95,
         ),
@@ -68,12 +71,11 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "Mold / musty smell", "value": "mold"},
                 {"label": "Other unpleasant smell", "value": "other_odor"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=90,
             business_importance=0.9,
         ),
     },
-
     "ROOM_EXPERIENCE": {
         "hair_dryer": FacetConfig(
             question_text="Was a hair dryer provided?",
@@ -81,7 +83,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "Yes", "value": "yes"},
                 {"label": "No", "value": "no"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=365,
             business_importance=0.45,
         ),
@@ -91,7 +93,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "Yes", "value": "yes"},
                 {"label": "No", "value": "no"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=365,
             business_importance=0.4,
         ),
@@ -102,7 +104,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "No", "value": "no"},
                 {"label": "Not sure", "value": "unknown"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=180,
             business_importance=0.5,
         ),
@@ -113,12 +115,11 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "No", "value": "no"},
                 {"label": "Partially", "value": "partial"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=365,
             business_importance=0.45,
         ),
     },
-
     "BED_SLEEP": {
         "pillow_count": FacetConfig(
             question_text="How many pillows were provided in the room?",
@@ -128,7 +129,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "3+", "value": "3_plus"},
                 {"label": "Not sure", "value": "unknown"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=365,
             business_importance=0.35,
         ),
@@ -139,7 +140,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "No", "value": "no"},
                 {"label": "Not sure", "value": "unknown"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=365,
             business_importance=0.35,
         ),
@@ -150,7 +151,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "No", "value": "no"},
                 {"label": "Not sure", "value": "unknown"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=365,
             business_importance=0.3,
         ),
@@ -160,12 +161,11 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "Yes", "value": "good"},
                 {"label": "No", "value": "poor"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=180,
             business_importance=0.7,
         ),
     },
-
     "NOISE": {
         "external_noise": FacetConfig(
             question_text="Could you hear noise from the hallway, nearby rooms, or outside?",
@@ -174,7 +174,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "Some noise", "value": "some_noise"},
                 {"label": "Too noisy", "value": "too_noisy"},
             ],
-            expected_rate=2,
+            expected_rate=0.02,
             ttl_days=120,
             business_importance=0.9,
         ),
@@ -185,12 +185,11 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "A bit noisy", "value": "some_noise"},
                 {"label": "Too noisy", "value": "too_noisy"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=180,
             business_importance=0.75,
         ),
     },
-
     "ROOM_INFRA": {
         "lighting": FacetConfig(
             question_text="Was the lighting bright enough?",
@@ -198,7 +197,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "Yes", "value": "good"},
                 {"label": "No", "value": "poor"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=240,
             business_importance=0.55,
         ),
@@ -208,7 +207,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "Yes", "value": "working"},
                 {"label": "No", "value": "not_working"},
             ],
-            expected_rate=2,
+            expected_rate=0.02,
             ttl_days=120,
             business_importance=0.9,
         ),
@@ -218,7 +217,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "Yes", "value": "yes"},
                 {"label": "No", "value": "no"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=180,
             business_importance=0.8,
         ),
@@ -230,12 +229,11 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "No Wi‑Fi", "value": "not_available"},
                 {"label": "Not sure", "value": "unknown"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=180,
             business_importance=0.85,
         ),
     },
-
     "ROOM_SERVICE": {
         "breakfast_included": FacetConfig(
             question_text="Was breakfast included in the rate?",
@@ -245,7 +243,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "No breakfast", "value": "not_available"},
                 {"label": "Not sure", "value": "unknown"},
             ],
-            expected_rate=2,
+            expected_rate=0.02,
             ttl_days=120,
             business_importance=0.95,
         ),
@@ -256,7 +254,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "No", "value": "no"},
                 {"label": "Not sure", "value": "unknown"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=180,
             business_importance=0.6,
         ),
@@ -267,12 +265,11 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "No", "value": "no"},
                 {"label": "Not sure", "value": "unknown"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=180,
             business_importance=0.65,
         ),
     },
-
     "HOTEL_INFRA": {
         "elevator": FacetConfig(
             question_text="Does the hotel have an elevator?",
@@ -281,7 +278,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "No", "value": "no"},
                 {"label": "Not sure", "value": "unknown"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=365,
             business_importance=0.5,
         ),
@@ -292,7 +289,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "No", "value": "no"},
                 {"label": "Not sure", "value": "unknown"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=365,
             business_importance=0.55,
         ),
@@ -304,7 +301,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "No shuttle", "value": "not_available"},
                 {"label": "Not sure", "value": "unknown"},
             ],
-            expected_rate=2,
+            expected_rate=0.02,
             ttl_days=120,
             business_importance=0.9,
         ),
@@ -315,7 +312,7 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "No", "value": "no"},
                 {"label": "Not sure", "value": "unknown"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=240,
             business_importance=0.6,
         ),
@@ -327,9 +324,23 @@ TAXONOMY: dict[str, dict[str, FacetConfig]] = {
                 {"label": "Not good", "value": "poor"},
                 {"label": "Didn't try them", "value": "not_applicable"},
             ],
-            expected_rate=1,
+            expected_rate=0.01,
             ttl_days=180,
             business_importance=0.55,
         ),
     },
+}
+
+
+# --- compatibility layer for older modules ---
+
+AMENITY_FACETS = {
+    amenity: list(facets.keys())
+    for amenity, facets in TAXONOMY.items()
+}
+
+FACET_CONFIG = {
+    (amenity, facet): cfg
+    for amenity, facets in TAXONOMY.items()
+    for facet, cfg in facets.items()
 }

@@ -1,24 +1,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from pydantic import BaseModel, Field
+from typing import Any
 
-
-class FollowupRequest(BaseModel):
-    draft_text: str = ""
-    stay_date: date | None = None
-    asked_facets: list[tuple[str, str]] = Field(default_factory=list)
-
-
-class FollowupResponse(BaseModel):
-    property_id: str
-    amenity_id: str
-    facet: str
-    state: str
-    score: float
-    question_text: str
-    options: list[dict[str, str]]
-    debug: dict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SnapshotRowResponse(BaseModel):
@@ -35,11 +20,19 @@ class SnapshotRowResponse(BaseModel):
     coverage_gap: float
     staleness_score: float
     state: str
-    last_verified_at: date | None
-    explanation: str | None
+    last_verified_at: date | None = None
+    explanation: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
-class CandidateResponse(BaseModel):
+class FollowupRequest(BaseModel):
+    draft_text: str | None = None
+    asked_facets: list[Any] = Field(default_factory=list)
+    stay_date: date | None = None
+
+
+class FollowupResponse(BaseModel):
     property_id: str
     amenity_id: str
     facet: str
@@ -47,7 +40,13 @@ class CandidateResponse(BaseModel):
     score: float
     question_text: str
     options: list[dict[str, str]]
-    debug: dict
+    debug: dict[str, Any] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CandidateResponse(FollowupResponse):
+    pass
 
 
 class AnswerCreateRequest(BaseModel):

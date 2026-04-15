@@ -2,35 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import Any, Iterable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .evidence_extractor import extract_covered_facets_from_draft
 from .models import AmenitySnapshot
 from .settings import settings
 from .taxonomy import FACET_CONFIG
 
 
-
-PRIORITY_BOOSTS = {
-    ("ROOM_INFRA", "wifi_fee"): 0.25,
-    ("ROOM_SERVICE", "breakfast_included"): 0.25,
-    ("PARKING", "included"): 0.22,
-    ("HOTEL_INFRA", "shuttle"): 0.22,
-    ("ROOM_CLEANLINESS", "surfaces_clean"): 0.20,
-    ("ROOM_CLEANLINESS", "odor"): 0.20,
-    ("NOISE", "external_noise"): 0.18,
-    ("ROOM_INFRA", "hvac_working"): 0.18,
-}
-
-# ---------------------------------------------------
-# Candidate
-# ---------------------------------------------------
-
-@dataclass
-class Candidate:
+@dataclass(frozen=True)
+class FollowupCandidate:
     property_id: str
     amenity_id: str
     facet: str
@@ -41,256 +24,168 @@ class Candidate:
     debug: dict[str, Any]
 
 
-# ---------------------------------------------------
-# fatigue penalty
-# ---------------------------------------------------
-
-def _fatigue_penalty(asked_facets: list[tuple[str, str]]) -> float:
-    return 0.15 * len(asked_facets)
+def _facet_key(amenity_id: str, facet: str) -> str:
+    return f"{amenity_id}:{facet}"
 
 
-# ---------------------------------------------------
-# official fact boost
-# ---------------------------------------------------
+def _normalize_asked_facets(asked_facets: Iterable[Any] | None) -> set[str]:
+    normalized: set[str] = set()
+    if not asked_facets:
+        return normalized
 
-def _official_boost(snapshot: AmenitySnapshot, amenity_listed: bool) -> float:
+    for item in asked_facets:
+        amenity_id: str | None = None
+        facet: str | None = None
 
-    boost = 0.0
+        if isinstance(item, str):
+            for separator in (":", ".", "/", "|"):
+                if separator in item:
+                    left, right = item.split(separator, 1)
+                    amenity_id, facet = left.strip(), right.strip()
+                    break
+        elif isinstance(item, dict):
+            amenity_id = item.get("amenity_id")
+            facet = item.get("facet")
+        elif isinstance(item, (tuple, list)) and len(item) == 2:
+            amenity_id = str(item[0])
+            facet = str(item[1])
 
-    if snapshot.official_fact != "not_listed":
-        boost += 0.10
+        if amenity_id and facet:
+            normalized.add(_facet_key(amenity_id, facet))
 
-    if amenity_listed:
-        boost += 0.08
-
-    if snapshot.facet == "availability" and snapshot.official_fact != "not_listed":
-        boost += 0.15
-
-    if snapshot.state == "STALE" and snapshot.facet == "availability":
-        boost += 0.15
-
-    if snapshot.official_fact == "seasonal":
-        boost += 0.05
-
-    return boost
+    return normalized
 
 
-# ---------------------------------------------------
-# state bonus
-# ---------------------------------------------------
+def _draft_penalty(draft_text: str | None, amenity_id: str, facet: str) -> float:
+    if not draft_text:
+        return 0.0
 
-def _state_bonus(state: str) -> float:
+    draft = draft_text.lower()
+    keyword_map = {
+        ("PARKING", "included"): ["parking", "park"],
+        ("PARKING", "entrance_findability"): ["parking entrance"],
+        ("ROOM_CLEANLINESS", "surfaces_clean"): ["clean", "dirty", "dusty"],
+        ("ROOM_CLEANLINESS", "bedding_clean"): ["sheet", "bedding", "bed linen"],
+        ("ROOM_CLEANLINESS", "odor"): ["smell", "odor", "musty", "smoke"],
+        ("ROOM_INFRA", "wifi_available"): ["wifi", "wi-fi", "internet"],
+        ("ROOM_INFRA", "wifi_fee"): ["wifi", "wi-fi", "internet"],
+        ("ROOM_SERVICE", "breakfast_included"): ["breakfast"],
+        ("HOTEL_INFRA", "shuttle"): ["shuttle"],
+        ("NOISE", "external_noise"): ["noise", "quiet", "hallway", "street noise"],
+    }
 
-    return {
-        "CONFLICT": 0.20,
-        "STALE": 0.10,
+    keywords = keyword_map.get((amenity_id, facet), [])
+    if keywords and any(keyword in draft for keyword in keywords):
+        return 0.12
+    return 0.0
+
+
+def _score_snapshot(snapshot: AmenitySnapshot) -> FollowupCandidate | None:
+    cfg = FACET_CONFIG.get((snapshot.amenity_id, snapshot.facet))
+    if cfg is None:
+        return None
+
+    state_bonus = {
+        "CONFLICT": 0.22,
+        "STALE": 0.12,
         "MISSING": 0.05,
-        "SATURATED": -0.25,
-    }.get(state, 0.0)
+        "SATURATED": -0.20,
+    }.get(snapshot.state, 0.0)
 
-
-# ---------------------------------------------------
-# score
-# ---------------------------------------------------
-
-def _score(snapshot: AmenitySnapshot, amenity_listed: bool, asked_facets: list[tuple[str, str]]) -> float:
-
-    cfg = FACET_CONFIG[(snapshot.amenity_id, snapshot.facet)]
-
-    official_boost = _official_boost(snapshot, amenity_listed)
-
-    fatigue = _fatigue_penalty(asked_facets)
-
-    priority = PRIORITY_BOOSTS.get((snapshot.amenity_id, snapshot.facet), 0)
-
-    score = cfg.answerability * (
-
-        0.40 * snapshot.coverage_gap
-        + 0.30 * snapshot.staleness_score
+    raw_score = (
+        0.35 * snapshot.coverage_gap
+        + 0.25 * snapshot.staleness_score
         + 0.30 * snapshot.conflict_score
-        + 0.20 * cfg.business_importance
-        + official_boost
-        + priority
-        - fatigue
-    ) + _state_bonus(snapshot.state)
+        + 0.07 * cfg.business_importance
+        + 0.03 * cfg.answerability
+        + state_bonus
+    )
 
-    # ---------------------------------------------------
-    # rules
-    # ---------------------------------------------------
+    score = round(max(0.0, min(1.0, raw_score)), 3)
 
-    # availability 未稳定 → 不问 quality
-    if snapshot.facet == "quality":
-        score -= 0.10
+    return FollowupCandidate(
+        property_id=snapshot.property_id,
+        amenity_id=snapshot.amenity_id,
+        facet=snapshot.facet,
+        state=snapshot.state,
+        score=score,
+        question_text=cfg.question_text,
+        options=cfg.options,
+        debug={
+            "coverage_gap": snapshot.coverage_gap,
+            "staleness_score": snapshot.staleness_score,
+            "conflict_score": snapshot.conflict_score,
+            "business_importance": cfg.business_importance,
+            "answerability": cfg.answerability,
+            "state_bonus": state_bonus,
+            "official_fact": snapshot.official_fact,
+        },
+    )
 
-    # 避免问 saturated
-    if snapshot.state == "SATURATED":
-        score -= 0.30
-
-    # availability stale/conflict 强推
-    if (
-        snapshot.facet == "availability"
-        and snapshot.official_fact != "not_listed"
-        and snapshot.state in {"STALE", "CONFLICT"}
-    ):
-        score += 0.15
-
-    # WiFi：如果 availability 已知 → 问 reliability
-    if snapshot.amenity_id == "WIFI" and snapshot.facet == "availability":
-        score -= 0.15
-
-    # 非官方 amenity 的 stale
-    if snapshot.state == "STALE" and snapshot.official_fact == "not_listed":
-        score -= 0.10
-
-    return round(score, 4)
-
-
-# ---------------------------------------------------
-# pick followup
-# ---------------------------------------------------
-
-def pick_followup(
-    db: Session,
-    property_id: str,
-    draft_text: str,
-    asked_facets: list[tuple[str, str]] | None = None,
-    stay_date: date | None = None,
-) -> Candidate | None:
-
-    asked_facets = asked_facets or []
-
-    covered = extract_covered_facets_from_draft(draft_text)
-
-    rows = db.execute(
-        select(AmenitySnapshot).where(AmenitySnapshot.property_id == property_id)
-    ).scalars().all()
-
-    if not rows:
-        return None
-
-    amenity_listed_map = {}
-
-    for row in rows:
-        if row.facet == "availability":
-            amenity_listed_map[row.amenity_id] = row.official_fact != "not_listed"
-
-    candidates: list[Candidate] = []
-
-    for row in rows:
-
-        key = (row.amenity_id, row.facet)
-
-        if key in covered or key in asked_facets:
-            continue
-
-        cfg = FACET_CONFIG.get(key)
-
-        if cfg is None:
-            continue
-
-        score = _score(row, amenity_listed_map.get(row.amenity_id, False), asked_facets)
-
-        debug = {
-            "state": row.state,
-            "official_fact": row.official_fact,
-            "coverage_gap": row.coverage_gap,
-            "staleness_score": row.staleness_score,
-            "conflict_score": row.conflict_score,
-            "actual_recent_coverage": row.actual_recent_coverage,
-            "expected_recent_coverage": row.expected_recent_coverage,
-            "lifetime_coverage": row.lifetime_coverage,
-            "last_verified_at": str(row.last_verified_at) if row.last_verified_at else None,
-            "stay_date": str(stay_date) if stay_date else None,
-        }
-
-        candidates.append(
-            Candidate(
-                property_id=property_id,
-                amenity_id=row.amenity_id,
-                facet=row.facet,
-                state=row.state,
-                score=score,
-                question_text=cfg.question_text,
-                options=cfg.options,
-                debug=debug,
-            )
-        )
-
-    if not candidates:
-        return None
-
-    candidates.sort(key=lambda x: x.score, reverse=True)
-
-    best = candidates[0]
-
-    if best.score < settings.ask_threshold:
-        return None
-
-    return best
-
-
-# ---------------------------------------------------
-# top candidates
-# ---------------------------------------------------
 
 def top_candidates(
     db: Session,
     property_id: str,
-    draft_text: str,
-    asked_facets: list[tuple[str, str]] | None = None,
+    draft_text: str | None = None,
+    asked_facets: list[Any] | None = None,
     limit: int = 5,
-) -> list[Candidate]:
-
-    asked_facets = asked_facets or []
-
-    covered = extract_covered_facets_from_draft(draft_text)
-
-    rows = db.execute(
-        select(AmenitySnapshot).where(AmenitySnapshot.property_id == property_id)
+) -> list[FollowupCandidate]:
+    asked = _normalize_asked_facets(asked_facets)
+    snapshots = db.execute(
+        select(AmenitySnapshot)
+        .where(AmenitySnapshot.property_id == property_id)
+        .order_by(AmenitySnapshot.amenity_id, AmenitySnapshot.facet)
     ).scalars().all()
 
-    amenity_listed_map = {}
-
-    for row in rows:
-        if row.facet == "availability":
-            amenity_listed_map[row.amenity_id] = row.official_fact != "not_listed"
-
-    candidates: list[Candidate] = []
-
-    for row in rows:
-
-        key = (row.amenity_id, row.facet)
-
-        if key in covered or key in asked_facets:
+    ranked: list[FollowupCandidate] = []
+    for snapshot in snapshots:
+        if _facet_key(snapshot.amenity_id, snapshot.facet) in asked:
+            continue
+        if snapshot.state == "SATURATED" and snapshot.conflict_score < 0.2:
             continue
 
-        cfg = FACET_CONFIG.get(key)
-
-        if cfg is None:
+        candidate = _score_snapshot(snapshot)
+        if candidate is None:
             continue
 
-        candidates.append(
-            Candidate(
-                property_id=property_id,
-                amenity_id=row.amenity_id,
-                facet=row.facet,
-                state=row.state,
-                score=_score(row, amenity_listed_map.get(row.amenity_id, False), asked_facets),
-                question_text=cfg.question_text,
-                options=cfg.options,
-                debug={
-                    "official_fact": row.official_fact,
-                    "coverage_gap": row.coverage_gap,
-                    "staleness_score": row.staleness_score,
-                    "conflict_score": row.conflict_score,
-                    "actual_recent_coverage": row.actual_recent_coverage,
-                    "expected_recent_coverage": row.expected_recent_coverage,
-                    "lifetime_coverage": row.lifetime_coverage,
-                    "last_verified_at": str(row.last_verified_at) if row.last_verified_at else None,
-                },
+        penalty = _draft_penalty(draft_text, snapshot.amenity_id, snapshot.facet)
+        adjusted_score = round(max(0.0, candidate.score - penalty), 3)
+        ranked.append(
+            FollowupCandidate(
+                property_id=candidate.property_id,
+                amenity_id=candidate.amenity_id,
+                facet=candidate.facet,
+                state=candidate.state,
+                score=adjusted_score,
+                question_text=candidate.question_text,
+                options=candidate.options,
+                debug={**candidate.debug, "draft_penalty": penalty},
             )
         )
 
-    candidates.sort(key=lambda x: x.score, reverse=True)
+    ranked.sort(key=lambda item: (-item.score, item.amenity_id, item.facet))
+    return ranked[:limit]
 
-    return candidates[:limit]
+
+def pick_followup(
+    db: Session,
+    property_id: str,
+    draft_text: str | None = None,
+    asked_facets: list[Any] | None = None,
+    stay_date: date | None = None,
+) -> FollowupCandidate | None:
+    _ = stay_date  # reserved for future use
+    candidates = top_candidates(
+        db=db,
+        property_id=property_id,
+        draft_text=draft_text,
+        asked_facets=asked_facets,
+        limit=1,
+    )
+    if not candidates:
+        return None
+
+    candidate = candidates[0]
+    if candidate.score < settings.ask_threshold:
+        return None
+    return candidate

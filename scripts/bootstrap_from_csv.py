@@ -9,7 +9,14 @@ from sqlalchemy import delete
 
 from app.db import Base, SessionLocal, engine
 from app.evidence_extractor import EXTRACTOR_VERSION, extract_review_evidence
-from app.models import OfficialFact, Property, Review, ReviewEvidence
+from app.models import (
+    AmenitySnapshot,
+    FollowupAnswer,
+    OfficialFact,
+    Property,
+    Review,
+    ReviewEvidence,
+)
 from app.official_facts import extract_official_facts
 from app.snapshot_builder import rebuild_snapshots
 from app.utils import make_review_id, normalize_whitespace, parse_date_safe, parse_rating_overall
@@ -30,39 +37,55 @@ def main(
     if not reviews_path.exists():
         raise typer.BadParameter(f"Reviews CSV not found: {reviews_path}")
 
+    typer.echo("Loading descriptions...")
     desc_df = pd.read_csv(desc_path)
+
+    typer.echo("Loading reviews...")
     reviews_df = pd.read_csv(reviews_path)
 
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
 
     try:
+        typer.echo("Resetting tables...")
         db.execute(delete(ReviewEvidence))
+        db.execute(delete(AmenitySnapshot))
+        db.execute(delete(FollowupAnswer))
         db.execute(delete(OfficialFact))
         db.execute(delete(Review))
         db.execute(delete(Property))
         db.commit()
 
+        property_payloads: dict[str, dict] = {}
         for _, row in desc_df.iterrows():
             payload = {col: (None if pd.isna(row[col]) else row[col]) for col in desc_df.columns}
+            property_id_raw = payload.get("eg_property_id")
+            if property_id_raw is None:
+                continue
+            property_payloads[str(property_id_raw)] = payload
 
+        typer.echo("Writing properties...")
+        for property_id, payload in property_payloads.items():
             db.add(
                 Property(
-                    property_id=str(payload["eg_property_id"]),
+                    property_id=property_id,
                     city=payload.get("city"),
                     province=payload.get("province"),
                     country=payload.get("country"),
                     star_rating=float(payload["star_rating"]) if payload.get("star_rating") is not None else None,
-                    guest_rating_avg=float(payload["guestrating_avg_expedia"]) if payload.get("guestrating_avg_expedia") is not None else None,
+                    guest_rating_avg=(
+                        float(payload["guestrating_avg_expedia"])
+                        if payload.get("guestrating_avg_expedia") is not None
+                        else None
+                    ),
                     popular_amenities_list=payload.get("popular_amenities_list"),
                     description_blob=json.dumps(payload, ensure_ascii=False, default=str),
                 )
             )
         db.commit()
 
-        for _, row in desc_df.iterrows():
-            payload = {col: (None if pd.isna(row[col]) else row[col]) for col in desc_df.columns}
-            property_id = str(payload["eg_property_id"])
+        typer.echo("Writing official facts...")
+        for property_id, payload in property_payloads.items():
             for fact in extract_official_facts(payload):
                 db.add(
                     OfficialFact(
@@ -76,13 +99,43 @@ def main(
                 )
         db.commit()
 
+        known_properties = set(property_payloads.keys())
+
+        typer.echo("Writing reviews...")
+
+        existing_review_ids = {
+            r.review_id for r in db.query(Review.review_id).all()
+        }
+
         for _, row in reviews_df.iterrows():
+
             property_id = str(row["eg_property_id"])
+
+            if property_id not in known_properties:
+                db.add(
+                    Property(
+                        property_id=property_id,
+                        description_blob="{}",
+                    )
+                )
+                known_properties.add(property_id)
+
             acquisition_date = parse_date_safe(row.get("acquisition_date"))
+
             review_title = None if pd.isna(row.get("review_title")) else str(row.get("review_title"))
             review_text = None if pd.isna(row.get("review_text")) else str(row.get("review_text"))
+
             full_text = normalize_whitespace(f"{review_title or ''}. {review_text or ''}")
-            review_id = make_review_id(property_id, acquisition_date, review_title, review_text)
+
+            review_id = make_review_id(
+                property_id,
+                acquisition_date,
+                review_title,
+                review_text,
+            )
+
+            if review_id in existing_review_ids:
+                continue
 
             db.add(
                 Review(
@@ -97,12 +150,17 @@ def main(
                     full_text=full_text,
                 )
             )
+
+            existing_review_ids.add(review_id)
+
         db.commit()
 
+        typer.echo("Extracting review evidence...")
         reviews = db.query(Review).all()
         for review in reviews:
             if not review.full_text:
                 continue
+
             for evidence in extract_review_evidence(review.full_text):
                 db.add(
                     ReviewEvidence(
@@ -119,8 +177,13 @@ def main(
                 )
         db.commit()
 
+        typer.echo("Building snapshots...")
         rebuild_snapshots(db=db)
+
         typer.echo("Bootstrap complete.")
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
